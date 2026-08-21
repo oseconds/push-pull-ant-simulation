@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>밀고 당기기 - 개미 군체 시뮬레이션</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #f7f5ef;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.3/p5.min.js"></script>
+</head>
+<body>
+<script>
+p5.disableFriendlyErrors = true;
+
+const CONFIG = {
+  antCount: 120,
+  maxSpeed: 2.2,
+  maxForce: 0.08,
+  leaderSeekWeight: 1.2,
+  wanderWeight: 0.5,
+  antLionWeight: 2.5,
+  repulsionWeight: 3.5,
+  repulsionDist: 35,
+  antLionRadius: 90,
+  antLionStrength: 0.8
+};
+
+let ants = [];
+let antLions = [];
+let userLines = [];
+let currentStroke = [];
+let isDrawing = false;
+
+function setup() {
+  pixelDensity(1);
+  createCanvas(windowWidth, windowHeight);
+  antLions.push(createVector(width * 0.3, height * 0.4));
+  antLions.push(createVector(width * 0.7, height * 0.7));
+
+  for (let i = 0; i < CONFIG.antCount; i++) {
+    ants.push(new Ant(random(width), random(height), i === 0));
+  }
+}
+
+function draw() {
+  background(247, 245, 239);
+
+  noFill();
+  for (let center of antLions) {
+    stroke(180, 160, 140, 50);
+    strokeWeight(1);
+    for (let r = CONFIG.antLionRadius; r > 0; r -= 15) {
+      ellipse(center.x, center.y, r * 2);
+    }
+    fill(120, 100, 80, 40);
+    noStroke();
+    ellipse(center.x, center.y, 20);
+  }
+
+  stroke(26, 43, 76, 200);
+  strokeWeight(2);
+  noFill();
+  for (let lineStroke of userLines) {
+    beginShape();
+    for (let pt of lineStroke) vertex(pt.x, pt.y);
+    endShape();
+  }
+
+  if (isDrawing && currentStroke.length > 0) {
+    beginShape();
+    for (let pt of currentStroke) vertex(pt.x, pt.y);
+    endShape();
+  }
+
+  let leader = ants[0];
+  for (let ant of ants) {
+    ant.behaviors(leader, antLions, userLines);
+    ant.update();
+    ant.show();
+  }
+}
+
+class Ant {
+  constructor(x, y, isLeader) {
+    this.pos = createVector(x, y);
+    this.vel = p5.Vector.random2D().mult(random(1, 2));
+    this.acc = createVector(0, 0);
+    this.isLeader = isLeader;
+    this.maxSpeed = isLeader ? CONFIG.maxSpeed * 1.1 : CONFIG.maxSpeed * random(0.8, 1.2);
+    this.maxForce = CONFIG.maxForce;
+    this.history = [];
+    this.wanderAngle = random(TWO_PI);
+  }
+
+  applyForce(force) {
+    this.acc.add(force);
+  }
+
+  behaviors(leader, antLions, lines) {
+    let forceWander = this.wander();
+    let forceLeader = createVector(0, 0);
+    let forceAntLion = createVector(0, 0);
+    let forceRepulsion = this.repulsion(lines);
+
+    if (!this.isLeader && leader) {
+      forceLeader = this.seek(leader.pos);
+      forceLeader.mult(CONFIG.leaderSeekWeight);
+    }
+
+    forceWander.mult(CONFIG.wanderWeight);
+
+    for (let center of antLions) {
+      let d = p5.Vector.dist(this.pos, center);
+      if (d < CONFIG.antLionRadius) {
+        let pull = p5.Vector.sub(center, this.pos);
+        let strength = map(d, 0, CONFIG.antLionRadius, CONFIG.antLionStrength, 0);
+        pull.setMag(strength);
+        forceAntLion.add(pull);
+      }
+    }
+    forceAntLion.mult(CONFIG.antLionWeight);
+    forceRepulsion.mult(CONFIG.repulsionWeight);
+
+    this.applyForce(forceWander);
+    this.applyForce(forceLeader);
+    this.applyForce(forceAntLion);
+    this.applyForce(forceRepulsion);
+  }
+
+  wander() {
+    this.wanderAngle += random(-0.5, 0.5);
+    let circleRadius = 16;
+    let circleDist = 24;
+    let wanderPoint = this.vel.copy().setMag(circleDist).add(this.pos);
+    let displacement = p5.Vector.fromAngle(this.wanderAngle).mult(circleRadius);
+    return this.seek(wanderPoint.add(displacement));
+  }
+
+  seek(target) {
+    let desired = p5.Vector.sub(target, this.pos);
+    desired.setMag(this.maxSpeed);
+    let steer = p5.Vector.sub(desired, this.vel);
+    steer.limit(this.maxForce);
+    return steer;
+  }
+
+  repulsion(lines) {
+    let steer = createVector(0, 0);
+    for (let lineStroke of lines) {
+      for (let i = 0; i < lineStroke.length - 1; i++) {
+        let a = lineStroke[i];
+        let b = lineStroke[i+1];
+        let pt = this.getClosestPointOnSegment(this.pos, a, b);
+        let d = p5.Vector.dist(this.pos, pt);
+        if (d < CONFIG.repulsionDist) {
+          let diff = p5.Vector.sub(this.pos, pt);
+          if (diff.magSq() === 0) {
+            diff = createVector(random(-1, 1), random(-1, 1));
+          }
+          diff.setMag(map(d, 0, CONFIG.repulsionDist, this.maxSpeed, 0));
+          steer.add(diff);
+        }
+      }
+    }
+    steer.limit(this.maxForce * 3);
+    return steer;
+  }
+
+  getClosestPointOnSegment(p, a, b) {
+    let ab = p5.Vector.sub(b, a);
+    let ap = p5.Vector.sub(p, a);
+    let abSq = ab.magSq();
+    if (abSq === 0) return a.copy();
+    let t = constrain(ap.dot(ab) / abSq, 0, 1);
+    return a.copy().add(ab.mult(t));
+  }
+
+  update() {
+    this.vel.add(this.acc);
+    this.vel.limit(this.maxSpeed);
+    this.pos.add(this.vel);
+    this.acc.mult(0);
+
+    let margin = 20;
+    if (this.pos.x < margin) this.vel.x += 0.2;
+    if (this.pos.x > width - margin) this.vel.x -= 0.2;
+    if (this.pos.y < margin) this.vel.y += 0.2;
+    if (this.pos.y > height - margin) this.vel.y -= 0.2;
+
+    if (frameCount % 10 === 0) {
+      this.history.push(this.pos.copy());
+      if (this.history.length > 15) this.history.shift();
+    }
+  }
+
+  show() {
+    noFill();
+    stroke(50, 50, 50, 15);
+    strokeWeight(1);
+    beginShape();
+    for (let pt of this.history) vertex(pt.x, pt.y);
+    endShape();
+
+    noStroke();
+    if (this.isLeader) {
+      fill(180, 40, 40);
+      ellipse(this.pos.x, this.pos.y, 5);
+    } else {
+      fill(40, 40, 40, 200);
+      ellipse(this.pos.x, this.pos.y, 3.5);
+    }
+  }
+}
+
+function mousePressed() {
+  isDrawing = true;
+  currentStroke = [createVector(mouseX, mouseY)];
+}
+
+function mouseDragged() {
+  if (isDrawing) currentStroke.push(createVector(mouseX, mouseY));
+}
+
+function mouseReleased() {
+  if (isDrawing && currentStroke.length > 1) userLines.push(currentStroke);
+  isDrawing = false;
+  currentStroke = [];
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+}
+</script>
+</body>
+</html>
